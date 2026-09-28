@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gobiteme — Design Your Own</title>
+<style>
+  :root{ --gold:#d4a853; --bg:#0f0f14; }
+  *{box-sizing:border-box;}
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:#f0f0f5;margin:0;padding:0;}
+  header{padding:18px 20px;text-align:center;border-bottom:1px solid rgba(212,168,83,.25);}
+  header h1{margin:0;font-size:22px;letter-spacing:.08em;color:var(--gold);}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+  @media (max-width:800px){ .wrap{grid-template-columns:1fr;} }
+  section{background:rgba(255,255,255,.03);border:1px solid rgba(212,168,83,.15);border-radius:12px;padding:16px;}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.1em;color:var(--gold);margin:0 0 12px;}
+  select,textarea,input{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(212,168,83,.3);background:#181820;color:#fff;font-size:15px;margin-bottom:10px;}
+  .swatches{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+  .swatch{width:32px;height:32px;border-radius:50%;border:2px solid rgba(255,255,255,.2);cursor:pointer;}
+  .swatch.sel{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold);}
+  .zones{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+  .zone-btn{padding:8px 14px;border-radius:8px;border:1px solid rgba(212,168,83,.4);background:rgba(212,168,83,.08);color:#fff;cursor:pointer;font-size:13px;}
+  .zone-btn.sel{background:var(--gold);color:#1a0d00;font-weight:600;}
+  .zone-btn.filled::after{content:' \2713';color:#5fd77a;}
+  .canvas-wrap{position:relative;width:100%;aspect-ratio:1/1;background:#1a1a22;border-radius:10px;overflow:hidden;}
+  canvas{width:100%;height:100%;}
+  button.primary{width:100%;padding:13px;border:none;border-radius:10px;background:linear-gradient(135deg,var(--gold),#b8860b);color:#1a0030;font-weight:700;font-size:15px;cursor:pointer;letter-spacing:.05em;}
+  button.secondary{padding:10px 14px;border-radius:8px;border:1px solid rgba(212,168,83,.4);background:transparent;color:var(--gold);cursor:pointer;font-size:14px;margin-right:8px;margin-bottom:10px;}
+  .mode-row{display:flex;gap:8px;margin-bottom:10px;}
+  .mode-btn{flex:1;padding:9px;border-radius:8px;border:1px solid rgba(212,168,83,.35);background:transparent;color:#ccc;cursor:pointer;font-size:13px;}
+  .mode-btn.active{background:rgba(212,168,83,.18);color:var(--gold);border-color:var(--gold);}
+  .credit-badge{font-size:13px;color:#aaa;margin-bottom:10px;}
+  .status{font-size:13px;color:#e0a800;min-height:18px;margin-top:6px;}
+  #genThumb{width:100%;border-radius:8px;margin-top:10px;display:none;}
+</style>
+</head>
+<body>
+
+<header><h1>✦ GOBITEME — DESIGN YOUR OWN ✦</h1></header>
+
+<div class="wrap">
+
+  <section>
+    <h2>1. Choose your item</h2>
+    <select id="garmentSelect"></select>
+    <div class="swatches" id="colorSwatches"></div>
+    <select id="sizeSelect"></select>
+
+    <h2 style="margin-top:18px;">2. Pick a print zone</h2>
+    <div class="zones" id="zoneButtons"></div>
+
+    <div class="canvas-wrap">
+      <canvas id="previewCanvas" width="1000" height="1000"></canvas>
+    </div>
+  </section>
+
+  <section>
+    <h2>3. Design it</h2>
+    <div class="credit-badge" id="creditBadge">Checking your design credits…</div>
+
+    <div class="mode-row">
+      <button class="mode-btn active" id="modeDictate" onclick="setInputMode('dictate')">🎙 Dictate</button>
+      <button class="mode-btn" id="modeAgent" onclick="setInputMode('agent')">✦ Smart Prompt</button>
+    </div>
+
+    <textarea id="promptBox" rows="4" placeholder="Describe your design, or use the mic..."></textarea>
+    <button class="secondary" id="micBtn" onclick="toggleRecording()">🎙 Hold to speak</button>
+    <button class="secondary" onclick="document.getElementById('refImgInput').click()">📎 Add reference image</button>
+    <input type="file" id="refImgInput" accept="image/*" style="display:none" onchange="onRefImageChosen(event)">
+    <div id="refImgPreviewWrap" style="display:none;margin-bottom:10px;">
+      <img id="refImgPreview" style="width:80px;border-radius:6px;">
+    </div>
+
+    <button class="primary" onclick="generateDesign()">✦ Generate Design</button>
+    <div class="status" id="genStatus"></div>
+    <img id="genThumb">
+    <button class="secondary" style="display:none;width:100%;margin-top:10px;" id="assignBtn" onclick="assignDesignToZone()">Assign this design to the selected zone →</button>
+  </section>
+
+</div>
+
+<script>
+// ---- Config ----
+const USER_EMAIL = localStorage.getItem('gb_user_email') || (function(){
+  const e = prompt('Enter your email to track your design credits:') || 'guest@example.com';
+  localStorage.setItem('gb_user_email', e);
+  return e;
+})();
+
+let CATALOG = {}, ZONES = {}, BLANKS = {};
+let currentGarment = null, currentColor = null, currentSize = null, currentZone = null;
+let inputMode = 'dictate';
+let mediaRecorder = null, audioChunks = [];
+let lastGeneratedImageUrl = null;
+let assignedDesigns = {}; // { garmentKey: { zoneName: imageUrl } }
+let refImageBase64 = null;
+
+async function loadData(){
+  [CATALOG, ZONES, BLANKS] = await Promise.all([
+    fetch('catalog-10.json').then(r=>r.json()),
+    fetch('zones.json').then(r=>r.json()),
+    fetch('real-blanks.json').then(r=>r.json())
+  ]);
+  const garmentSelect = document.getElementById('garmentSelect');
+  Object.keys(CATALOG).forEach(key => {
+    const opt = document.createElement('option');
+    opt.value = key; opt.textContent = key.replace(/_/g,' ');
+    garmentSelect.appendChild(opt);
+  });
+  garmentSelect.addEventListener('change', () => selectGarment(garmentSelect.value));
+  document.getElementById('sizeSelect').addEventListener('change', e => currentSize = e.target.value);
+  selectGarment(garmentSelect.value);
+  refreshCreditBadge();
+}
+
+// Nearest-real-blank-hex mapping (same sum-of-squares RGB distance approach as majormanifestor-site)
+function hexToRgb(hex){ const h = hex.replace('#',''); return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)]; }
+function nearestRealBlankHex(garmentKey, chosenHex){
+  const real = (BLANKS[garmentKey] && BLANKS[garmentKey].hexes) || [];
+  if (!real.length) return null;
+  const [r,g,b] = hexToRgb(chosenHex);
+  let best = real[0], bestDist = Infinity;
+  real.forEach(hx => {
+    const [rr,rg,rb] = hexToRgb(hx);
+    const d = (r-rr)**2 + (g-rg)**2 + (b-rb)**2;
+    if (d < bestDist) { bestDist = d; best = hx; }
+  });
+  return best;
+}
+
+function selectGarment(key){
+  currentGarment = key;
+  const colors = CATALOG[key].colors;
+  const swatchWrap = document.getElementById('colorSwatches');
+  swatchWrap.innerHTML = '';
+  colors.forEach((c,i) => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch' + (i===0?' sel':'');
+    sw.style.background = c.code;
+    sw.title = c.name;
+    sw.onclick = () => { document.querySelectorAll('.swatch').forEach(s=>s.classList.remove('sel')); sw.classList.add('sel'); selectColor(c); };
+    swatchWrap.appendChild(sw);
+  });
+  selectColor(colors[0]);
+
+  const zoneWrap = document.getElementById('zoneButtons');
+  zoneWrap.innerHTML = '';
+  const zonesForGarment = ZONES[key] || {};
+  Object.keys(zonesForGarment).forEach(zoneName => {
+    const btn = document.createElement('button');
+    btn.className = 'zone-btn';
+    btn.textContent = zoneName;
+    btn.id = 'zonebtn-' + zoneName;
+    btn.onclick = () => selectZone(zoneName);
+    zoneWrap.appendChild(btn);
+  });
+  const zoneNames = Object.keys(zonesForGarment);
+  const defaultZone = zoneNames.includes('front') ? 'front' : zoneNames[0];
+  if (defaultZone) selectZone(defaultZone);
+}
+
+function selectColor(colorObj){
+  currentColor = colorObj;
+  const sizeSelect = document.getElementById('sizeSelect');
+  sizeSelect.innerHTML = '';
+  Object.keys(colorObj.sizes).forEach(sz => {
+    const opt = document.createElement('option'); opt.value = sz; opt.textContent = sz;
+    sizeSelect.appendChild(opt);
+  });
+  currentSize = Object.keys(colorObj.sizes)[0];
+  redrawCanvas();
+}
+
+function selectZone(zoneName){
+  currentZone = zoneName;
+  document.querySelectorAll('.zone-btn').forEach(b => b.classList.remove('sel'));
+  const btn = document.getElementById('zonebtn-' + zoneName);
+  if (btn) btn.classList.add('sel');
+  redrawCanvas();
+}
+
+async function redrawCanvas(){
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,1000,1000);
+  if (!currentGarment || !currentColor) return;
+
+  const realHex = nearestRealBlankHex(currentGarment, currentColor.code.replace('#',''));
+  // Blank views available depend on the garment (some are front-only, racerback is back-only, etc.)
+  const availableViews = (BLANKS[currentGarment] && BLANKS[currentGarment].views) || ['front'];
+  const view = availableViews.includes(currentZone) ? currentZone
+    : (availableViews.includes('front') ? 'front' : availableViews[0]);
+
+  const blankPath = `mockups-blanks/${currentGarment}-blank-${realHex}-${view}.jpg`;
+  const img = new Image();
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, 1000, 1000);
+    drawZoneOverlaysAndDesigns(ctx, view);
+  };
+  img.onerror = () => {
+    ctx.fillStyle = '#222'; ctx.fillRect(0,0,1000,1000);
+    ctx.fillStyle = '#888'; ctx.font = '24px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('No blank photo for this colour/view yet', 500, 500);
+  };
+  img.src = blankPath;
+}
+
+function drawZoneOverlaysAndDesigns(ctx, view){
+  const zonesForGarment = ZONES[currentGarment] || {};
+  const zoneDef = zonesForGarment[view];
+  if (!zoneDef || !zoneDef.main) return;
+  const { x, y, w, h } = zoneDef.main;
+
+  // Outline every zone that matches the currently displayed view, highlighting the selected one
+  Object.keys(zonesForGarment).forEach(zName => {
+    if (zName !== view) return;
+    ctx.strokeStyle = (zName === currentZone) ? '#d4a853' : 'rgba(255,255,255,.35)';
+    ctx.lineWidth = zName === currentZone ? 3 : 1.5;
+    ctx.setLineDash(zName === currentZone ? [] : [6,4]);
+    ctx.strokeRect(x, y, w, h);
+  });
+
+  // Draw any design already assigned to this garment+zone
+  const assignedUrl = assignedDesigns[currentGarment] && assignedDesigns[currentGarment][view];
+  if (assignedUrl) {
+    const designImg = new Image();
+    designImg.crossOrigin = 'anonymous';
+    designImg.onload = () => { ctx.drawImage(designImg, x, y, w, h); };
+    designImg.src = assignedUrl;
+  }
+
+  // Mark zone buttons that already have a design assigned
+  Object.keys(zonesForGarment).forEach(zName => {
+    const btn = document.getElementById('zonebtn-' + zName);
+    if (!btn) return;
+    const has = assignedDesigns[currentGarment] && assignedDesigns[currentGarment][zName];
+    btn.classList.toggle('filled', !!has);
+  });
+}
+
+// ---- Speech input (dictate / agent modes) ----
+function setInputMode(mode){
+  inputMode = mode;
+  document.getElementById('modeDictate').classList.toggle('active', mode==='dictate');
+  document.getElementById('modeAgent').classList.toggle('active', mode==='agent');
+}
+
+async function toggleRecording(){
+  const micBtn = document.getElementById('micBtn');
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+    mediaRecorder.onstop = onRecordingStopped;
+    mediaRecorder.start();
+    micBtn.textContent = '⏹ Stop recording';
+  } else {
+    mediaRecorder.stop();
+    micBtn.textContent = '🎙 Hold to speak';
+  }
+}
+
+async function onRecordingStopped(){
+  const blob = new Blob(audioChunks, { type: 'audio/webm' });
+  const reader = new FileReader();
+  reader.onloadend = async () => {
+    const base64 = reader.result.split(',')[1];
+    setStatus('Transcribing…');
+    const sttRes = await fetch('/.netlify/functions/speech-to-text', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ audioBase64: base64, mimeType: 'audio/webm' })
+    });
+    const sttData = await sttRes.json();
+    if (!sttRes.ok) { setStatus('Transcription failed: ' + (sttData.error||'')); return; }
+
+    if (inputMode === 'dictate') {
+      document.getElementById('promptBox').value = sttData.text;
+      setStatus('');
+    } else {
+      setStatus('Refining your prompt…');
+      const agentRes = await fetch('/.netlify/functions/refine-prompt-agent', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ transcript: sttData.text })
+      });
+      const agentData = await agentRes.json();
+      if (!agentRes.ok) { setStatus('Prompt refinement failed: ' + (agentData.error||'')); return; }
+      document.getElementById('promptBox').value = agentData.refinedPrompt;
+      setStatus('');
+    }
+  };
+  reader.readAsDataURL(blob);
+}
+
+function onRefImageChosen(event){
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    refImageBase64 = reader.result.split(',')[1];
+    document.getElementById('refImgPreview').src = reader.result;
+    document.getElementById('refImgPreviewWrap').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---- Credits ----
+async function refreshCreditBadge(){
+  try {
+    const res = await fetch(`/.netlify/functions/get-credit-balance?userEmail=${encodeURIComponent(USER_EMAIL)}`);
+    const data = await res.json();
+    if (res.ok) {
+      document.getElementById('creditBadge').textContent =
+        `Design credit: £${(data.creditBalanceGbp||0).toFixed(2)} · ${data.designsRemaining||0} designs left`;
+    }
+  } catch (e) {
+    document.getElementById('creditBadge').textContent = 'Could not load credit balance';
+  }
+}
+
+function setStatus(msg){ document.getElementById('genStatus').textContent = msg; }
+
+async function generateDesign(){
+  const prompt = document.getElementById('promptBox').value.trim();
+  if (!prompt) { setStatus('Type or dictate a description first.'); return; }
+
+  setStatus('Generating your design…');
+  const res = await fetch('/.netlify/functions/generate-design', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ userEmail: USER_EMAIL, prompt, referenceImageUrl: refImageBase64 ? ('data:image/png;base64,'+refImageBase64) : undefined })
+  });
+  const data = await res.json();
+  refreshCreditBadge();
+
+  if (!res.ok) {
+    if (data.error === 'no_credit') { setStatus(data.message); }
+    else { setStatus('Generation failed: ' + (data.error||'unknown error')); }
+    return;
+  }
+  lastGeneratedImageUrl = data.imageUrl;
+  const thumb = document.getElementById('genThumb');
+  thumb.src = lastGeneratedImageUrl; thumb.style.display = 'block';
+  document.getElementById('assignBtn').style.display = 'block';
+  setStatus('Design ready — assign it to your selected zone, or generate another.');
+}
+
+function assignDesignToZone(){
+  if (!lastGeneratedImageUrl || !currentGarment || !currentZone) return;
+  if (!assignedDesigns[currentGarment]) assignedDesigns[currentGarment] = {};
+  assignedDesigns[currentGarment][currentZone] = lastGeneratedImageUrl;
+  redrawCanvas();
+  setStatus('Assigned to ' + currentZone + '.');
+}
+
+loadData();
+</script>
+
+</body>
+</html>
